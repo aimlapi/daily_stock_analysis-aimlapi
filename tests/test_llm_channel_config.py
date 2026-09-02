@@ -10,10 +10,12 @@ from tests.litellm_stub import ensure_litellm_stub
 ensure_litellm_stub()
 
 from src.config import (
+    AIMLAPI_ATTRIBUTION_HEADERS,
     ANSPIRE_LLM_BASE_URL_DEFAULT,
     ANSPIRE_LLM_MODEL_DEFAULT,
     Config,
     apply_litellm_api_surface,
+    build_provider_extra_headers,
     get_configured_llm_models,
     get_effective_agent_models_to_try,
     get_effective_agent_primary_model,
@@ -1688,6 +1690,164 @@ class LLMChannelConfigTestCase(unittest.TestCase):
             ),
             "https://dashscope.aliyuncs.com/compatible-mode/v1/models",
         )
+
+
+class ProviderExtraHeadersTestCase(unittest.TestCase):
+    """Sponsored / attribution headers must stay scoped to their own provider."""
+
+    def test_aimlapi_partner_id_matches_backend_contract(self) -> None:
+        # A malformed partner id is silently dropped by the gateway, so the shape
+        # has to be asserted here rather than discovered in production.
+        self.assertRegex(
+            AIMLAPI_ATTRIBUTION_HEADERS["X-AIMLAPI-Partner-ID"],
+            r"^part_[A-Za-z0-9]{1,64}$",
+        )
+        self.assertRegex(
+            AIMLAPI_ATTRIBUTION_HEADERS["X-AIMLAPI-Source"],
+            r"^(web|agent|mcp)/[a-z0-9-]{1,32}$",
+        )
+        # HTTP-Referer / X-Title identify the calling project, not the gateway.
+        self.assertEqual(
+            AIMLAPI_ATTRIBUTION_HEADERS["HTTP-Referer"],
+            "https://github.com/ZhuLinsen/daily_stock_analysis",
+        )
+        self.assertEqual(AIMLAPI_ATTRIBUTION_HEADERS["X-Title"], "Daily Stock Analysis")
+
+    def test_headers_are_injected_only_for_the_matching_provider(self) -> None:
+        self.assertEqual(
+            build_provider_extra_headers("https://api.aimlapi.com/v1"),
+            dict(AIMLAPI_ATTRIBUTION_HEADERS),
+        )
+        self.assertEqual(
+            build_provider_extra_headers("https://aihubmix.com/v1"),
+            {"APP-Code": "GPIJ3886"},
+        )
+        for base_url in (
+            "",
+            None,
+            "https://api.openai.com/v1",
+            "https://openrouter.ai/api/v1",
+            # A proxy that merely fronts the gateway must not inherit attribution.
+            "https://api.aimlapi.com.example.com/v1",
+            "https://proxy.example.com/api.aimlapi.com/v1",
+        ):
+            with self.subTest(base_url=base_url):
+                self.assertEqual(build_provider_extra_headers(base_url), {})
+
+    def test_channel_extra_headers_win_and_constants_are_not_mutated(self) -> None:
+        original = dict(AIMLAPI_ATTRIBUTION_HEADERS)
+        merged = build_provider_extra_headers(
+            "https://api.aimlapi.com/v1",
+            {"X-Title": "custom", "X-Tenant": "team-a"},
+        )
+
+        self.assertEqual(merged["X-Title"], "custom")
+        self.assertEqual(merged["X-Tenant"], "team-a")
+        self.assertEqual(merged["X-AIMLAPI-Partner-ID"], original["X-AIMLAPI-Partner-ID"])
+        self.assertEqual(AIMLAPI_ATTRIBUTION_HEADERS, original)
+
+        merged["X-AIMLAPI-Partner-ID"] = "part_mutated"
+        self.assertEqual(AIMLAPI_ATTRIBUTION_HEADERS, original)
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_aimlapi_channel_deployments_carry_attribution_headers(
+        self,
+        _mock_parse_yaml,
+        _mock_setup_env,
+    ) -> None:
+        env = {
+            "LLM_CHANNELS": "aimlapi,openai",
+            "LLM_AIMLAPI_PROTOCOL": "openai",
+            "LLM_AIMLAPI_BASE_URL": "https://api.aimlapi.com/v1",
+            "LLM_AIMLAPI_API_KEY": "sk-aimlapi-test-value",
+            "LLM_AIMLAPI_MODELS": "claude-sonnet-4.6",
+            "LLM_OPENAI_PROTOCOL": "openai",
+            "LLM_OPENAI_BASE_URL": "https://api.openai.com/v1",
+            "LLM_OPENAI_API_KEY": "sk-openai-test-value",
+            "LLM_OPENAI_MODELS": "gpt-5.4-mini",
+        }
+
+        with patch.dict(os.environ, env, clear=True):
+            config = Config._load_from_env()
+
+        by_model = {
+            entry["model_name"]: entry["litellm_params"] for entry in config.llm_model_list
+        }
+        self.assertEqual(
+            by_model["openai/claude-sonnet-4.6"]["extra_headers"],
+            dict(AIMLAPI_ATTRIBUTION_HEADERS),
+        )
+        self.assertNotIn("extra_headers", by_model["openai/gpt-5.4-mini"])
+
+
+#: Request fields the aimlapi gateway answers with HTTP 400 when they are sent
+#: as JSON ``null`` (verified against POST /v1/chat/completions on 2026-09-03).
+#: ``stop`` / ``presence_penalty`` / ``frequency_penalty`` / ``n`` / ``user`` /
+#: ``logprobs`` / ``logit_bias`` / ``reasoning_effort`` accept ``null`` there.
+AIMLAPI_NULL_REJECTING_REQUEST_FIELDS = (
+    "temperature",
+    "top_p",
+    "seed",
+    "tools",
+    "tool_choice",
+    "response_format",
+    "stream",
+    "stream_options",
+    "parallel_tool_calls",
+    "max_tokens",
+    "max_completion_tokens",
+)
+
+
+class AimlapiRequestParamsTestCase(unittest.TestCase):
+    """Unset optionals must be omitted, not sent as JSON null.
+
+    An unset optional is exactly what an OpenAI-style client serializes as
+    ``null``, and this gateway answers 400 for the fields listed above rather
+    than treating them as absent. ``tools`` is the one that bites hardest: a
+    caller that clears tools between turns by setting the field to ``None``
+    succeeds on turn 1 and fails on turn 2 of every agent loop. Mocked
+    transports hide all of this, so the omission is pinned here.
+
+    (On a 400 the offending field is named in ``error.details[].path`` /
+    ``.reason``; the top-level ``message`` is generic.)
+    """
+
+    def test_unset_temperature_never_reaches_the_wire_as_null(self) -> None:
+        applied = apply_litellm_generation_params({}, "openai/claude-sonnet-4.6", None)
+
+        self.assertEqual(applied.get("temperature"), 0.7)
+        for field in AIMLAPI_NULL_REJECTING_REQUEST_FIELDS:
+            with self.subTest(field=field):
+                self.assertIsNotNone(applied.get(field, "absent"))
+
+    def test_channel_deployment_params_are_never_null(self) -> None:
+        channels = [
+            {
+                "name": "aimlapi",
+                "protocol": "openai",
+                "api_surface": "chat_completions",
+                "base_url": "https://api.aimlapi.com/v1",
+                "api_keys": ["sk-aimlapi-test-value"],
+                "models": ["openai/claude-sonnet-4.6"],
+            },
+            {
+                # No base_url and no key: the builder must omit those keys
+                # rather than writing None into litellm_params.
+                "name": "bare",
+                "protocol": "openai",
+                "api_surface": "chat_completions",
+                "base_url": "",
+                "api_keys": [""],
+                "models": ["openai/gpt-5.4-mini"],
+            },
+        ]
+
+        for entry in Config._channels_to_model_list(channels):
+            params = entry["litellm_params"]
+            with self.subTest(model_name=entry["model_name"]):
+                self.assertEqual([key for key, value in params.items() if value is None], [])
 
 
 if __name__ == "__main__":

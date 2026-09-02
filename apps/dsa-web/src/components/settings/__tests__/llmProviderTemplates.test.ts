@@ -21,6 +21,7 @@ describe('llmProviderTemplates', () => {
       'volcengine',
       'siliconflow',
       'openrouter',
+      'aimlapi',
       'gemini',
       'anthropic',
       'openai',
@@ -89,6 +90,18 @@ describe('llmProviderTemplates', () => {
       baseUrl: 'https://aihubmix.com/v1',
       officialSources: [{ label: 'AIHubmix', url: 'https://inferera.com/?aff=CfMq' }],
     });
+  });
+
+  it('keeps the aimlapi preset on the OpenAI-compatible chat completions entry', () => {
+    expect(LLM_PROVIDER_TEMPLATE_BY_ID.aimlapi).toMatchObject({
+      label: 'aimlapi.com',
+      protocol: 'openai',
+      baseUrl: 'https://api.aimlapi.com/v1',
+      placeholderModels: 'gpt-5.5-2026-04-23,claude-sonnet-4.6,deepseek-v4-flash',
+    });
+    // /v1/completions does not exist on this gateway; the Base URL must stop at /v1.
+    expect(LLM_PROVIDER_TEMPLATE_BY_ID.aimlapi.baseUrl.endsWith('/v1')).toBe(true);
+    expect(LLM_PROVIDER_TEMPLATE_BY_ID.aimlapi.configHint).toContain('anthropic/');
   });
 
   it('keeps basic metadata on non-custom provider templates', () => {

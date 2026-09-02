@@ -161,6 +161,20 @@ export const LLM_PROVIDER_TEMPLATES: LLMProviderTemplate[] = [
     ],
   },
   {
+    channelId: 'aimlapi',
+    label: 'aimlapi.com',
+    protocol: 'openai',
+    baseUrl: 'https://api.aimlapi.com/v1',
+    placeholderModels: 'gpt-5.5-2026-04-23,claude-sonnet-4.6,deepseek-v4-flash',
+    capabilities: ['openai-compatible', 'aggregator', 'model-discovery'],
+    configHint:
+      '模型名填平台 /v1/models 返回的 alias（例如 claude-sonnet-4.6，注意是点号）；不要填带 anthropic/、gemini/、xai/ 前缀的 id，这些前缀会被 LiteLLM 当作直连 provider，不再走本渠道 Base URL。',
+    officialSources: [
+      { label: 'AI/ML API Model Database', url: 'https://docs.aimlapi.com/api-references/model-database' },
+      { label: 'AI/ML API Quickstart', url: 'https://docs.aimlapi.com/quickstart/setting-up' },
+    ],
+  },
+  {
     channelId: 'gemini',
     label: 'Gemini 官方',
     protocol: 'gemini',
