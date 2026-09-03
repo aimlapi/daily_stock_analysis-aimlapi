@@ -136,7 +136,7 @@ AIMLAPI_API_HOST = "api.aimlapi.com"
 AIMLAPI_ATTRIBUTION_HEADERS: Dict[str, str] = {
     "HTTP-Referer": "https://github.com/ZhuLinsen/daily_stock_analysis",
     "X-Title": "Daily Stock Analysis",
-    "X-AIMLAPI-Partner-ID": "part_dailystockanalysis",
+    "X-AIMLAPI-Partner-ID": "part_ZBzsnhYW8aO7HueEfvKZM4je",
     "X-AIMLAPI-Source": "agent/daily-stock-analysis",
 }
 
