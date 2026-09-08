@@ -128,6 +128,41 @@ TICKFLOW_KLINE_ADJUST_VALUES = {"none", "forward", "backward", "forward_additive
 ANSPIRE_LLM_BASE_URL_DEFAULT = "https://open-gateway.anspire.cn/v6"
 ANSPIRE_LLM_MODEL_DEFAULT = "Doubao-Seed-2.0-lite"
 
+# 聚合平台的赞助 / 归因请求头。
+# 仅在请求确实发往对应服务商时注入，避免被带到其他渠道或中转代理上；
+# 渠道自身的 LLM_<CHANNEL>_EXTRA_HEADERS 始终优先，不会被这里覆盖。
+AIHUBMIX_SPONSORED_HEADERS: Dict[str, str] = {"APP-Code": "GPIJ3886"}
+AIMLAPI_API_HOST = "api.aimlapi.com"
+AIMLAPI_ATTRIBUTION_HEADERS: Dict[str, str] = {
+    "HTTP-Referer": "https://github.com/ZhuLinsen/daily_stock_analysis",
+    "X-Title": "Daily Stock Analysis",
+    "X-AIMLAPI-Partner-ID": "part_ZBzsnhYW8aO7HueEfvKZM4je",
+    "X-AIMLAPI-Source": "agent/daily-stock-analysis",
+}
+
+
+def build_provider_extra_headers(
+    base_url: Optional[str],
+    extra_headers: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """按 base_url 合并服务商赞助 / 归因请求头。
+
+    每次调用都返回新的 dict：既不修改模块级常量，也不覆盖调用方已经配置的同名
+    header。aihubmix 沿用既有的 base_url 子串匹配；aimlapi 按主机名精确匹配，
+    确保归因头不会跟着请求发到其他服务商或中转代理。
+    """
+    headers: Dict[str, Any] = dict(extra_headers or {})
+    raw_base_url = (base_url or "").strip()
+    if not raw_base_url:
+        return headers
+    if "aihubmix.com" in raw_base_url:
+        for header_name, header_value in AIHUBMIX_SPONSORED_HEADERS.items():
+            headers.setdefault(header_name, header_value)
+    if (urlparse(raw_base_url).hostname or "").lower() == AIMLAPI_API_HOST:
+        for header_name, header_value in AIMLAPI_ATTRIBUTION_HEADERS.items():
+            headers.setdefault(header_name, header_value)
+    return headers
+
 
 def _has_ntfy_topic_endpoint(value: Optional[str]) -> bool:
     """Return whether an ntfy URL points at a concrete topic endpoint."""
@@ -2624,10 +2659,8 @@ class Config:
                         litellm_params['api_key'] = api_key
                     if ch['base_url']:
                         litellm_params['api_base'] = ch['base_url']
-                    # Auto-inject aihubmix sponsored header
-                    headers = dict(ch.get('extra_headers') or {})
-                    if ch['base_url'] and 'aihubmix.com' in ch['base_url']:
-                        headers.setdefault('APP-Code', 'GPIJ3886')
+                    # Auto-inject provider sponsored / attribution headers
+                    headers = build_provider_extra_headers(ch['base_url'], ch.get('extra_headers'))
                     if headers:
                         litellm_params['extra_headers'] = headers
 
@@ -2689,8 +2722,9 @@ class Config:
                 params: Dict[str, Any] = {'model': '__legacy_openai__', 'api_key': k}
                 if openai_base_url:
                     params['api_base'] = openai_base_url
-                if openai_base_url and 'aihubmix.com' in openai_base_url:
-                    params['extra_headers'] = {'APP-Code': 'GPIJ3886'}
+                legacy_headers = build_provider_extra_headers(openai_base_url)
+                if legacy_headers:
+                    params['extra_headers'] = legacy_headers
                 model_list.append({
                     'model_name': '__legacy_openai__',
                     'litellm_params': params,
@@ -3733,8 +3767,9 @@ def extra_litellm_params(model: str, config: Config) -> Dict[str, Any]:
     if model.startswith("openai/") or "/" not in model:
         if config.openai_base_url:
             params["api_base"] = config.openai_base_url
-        if config.openai_base_url and "aihubmix.com" in config.openai_base_url:
-            params["extra_headers"] = {"APP-Code": "GPIJ3886"}
+        provider_headers = build_provider_extra_headers(config.openai_base_url)
+        if provider_headers:
+            params["extra_headers"] = provider_headers
     return params
 
 

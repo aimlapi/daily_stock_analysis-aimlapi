@@ -106,6 +106,7 @@ LITELLM_FALLBACK_MODELS=openai/gpt-5.6-terra,openai/gpt-5.6-luna
 
 | 服务商 | 渠道名 | 协议 | Base URL | 模型示例 |
 | --- | --- | --- | --- | --- |
+| aimlapi.com | `aimlapi` | `openai` | `https://api.aimlapi.com/v1` | `gpt-5.5-2026-04-23,claude-sonnet-4.6,deepseek-v4-flash` |
 | AIHubmix | `aihubmix` | `openai` | `https://aihubmix.com/v1` | `gpt-5.5,claude-sonnet-4-6,gemini-3.1-pro-preview` |
 | Anspire Open | `anspire` | `openai` | `https://open-gateway.anspire.cn/v6`（示例） | `Doubao-Seed-2.0-lite,Doubao-Seed-2.0-pro,qwen3.5-flash,MiniMax-M2.7`（示例） |
 | OpenAI | `openai` | `openai` | `https://api.openai.com/v1` | `gpt-5.5,gpt-5.4-mini` |
@@ -139,6 +140,7 @@ LITELLM_FALLBACK_MODELS=openai/gpt-5.6-terra,openai/gpt-5.6-luna
 | 火山方舟 / 豆包 | [在线推理（常规）](https://www.volcengine.com/docs/82379/2121998)、[模型列表](https://www.volcengine.com/docs/82379/1949118) | 官方示例使用 `https://ark.cn-beijing.volces.com/api/v3` 与 `doubao-seed-1-6-251015`；如使用 Coding Plan，请改用其专用 Base URL 和模型名，不要套用本表的在线推理模板。 |
 | SiliconFlow | [模型列表](https://docs.siliconflow.cn/quickstart/models)、[获取模型列表 API](https://docs.siliconflow.cn/cn/api-reference/models/get-model-list) | 平台模型实时更新且 `/models` 需要 API Key；模板只给常见新模型示例，保存前建议在 Web 设置页点击「获取模型」确认账号可见性。 |
 | OpenRouter | [Models API](https://openrouter.ai/docs/api/api-reference/models/get-models) | OpenRouter 支持 `~anthropic/claude-sonnet-latest`、`~openai/gpt-latest` 等 latest router alias；2026-05-03 的一次手动 live smoke 以 Claude Sonnet latest 作为默认示例通过，GPT latest 保留为可按账号权限切换的备选。 |
+| aimlapi.com | [Model Database](https://docs.aimlapi.com/api-references/model-database)、[Quickstart](https://docs.aimlapi.com/quickstart/setting-up) | OpenAI-compatible Base URL 为 `https://api.aimlapi.com/v1`，只提供 `/chat/completions` 与 `/responses`，没有 `/v1/completions`。`/v1/models` 返回 `{"object":"list","data":[...]}`，可以用「获取模型」拉取；但它对任意 Key 都返回 200，不能作为 Key 有效性判据，请以「测试连接」的实际推理结果为准。模型请填返回的 alias（例如 `claude-sonnet-4.6`——该网关同时提供点号与横杠两种拼写，只有点号形式在 `?include=all` 中声明了 `tools` / `vision` / `structured_output` 等能力，横杠形式只声明 `streaming`），不要填带 `anthropic/`、`gemini/`、`xai/` 前缀的 id，否则 LiteLLM 会按直连 provider 路由而不再走本渠道 Base URL。该网关还对 `temperature` / `top_p` / `seed` / `tools` / `tool_choice` / `response_format` / `stream` / `max_tokens` 等字段的 JSON `null` 返回 400（未设置的可选参数正好会被序列化成 `null`），因此请求参数应整键省略而不是传 `None`；本仓库现有实现已满足，回归见 `tests/test_llm_channel_config.py::AimlapiRequestParamsTestCase`。与 AIHubmix 的赞助头同一机制：请求发往 `api.aimlapi.com` 时会附加合作归因请求头（`X-AIMLAPI-Partner-ID` / `X-AIMLAPI-Source` / `HTTP-Referer` / `X-Title`），渠道自身的 `LLM_AIMLAPI_EXTRA_HEADERS` 同名字段优先，其他 Base URL 不会被注入。 |
 | LiteLLM | [OpenAI-Compatible Endpoints](https://docs.litellm.ai/docs/providers/openai_compatible) | OpenAI-compatible 端点需要把运行时模型写成 `openai/<model>`，Base URL 只填到服务商兼容入口，不额外拼接 `/chat/completions`。 |
 
 本页预设只保证配置形状与当前依赖的 OpenAI-compatible 路由规则一致；实际连通性仍取决于服务商账号权限、地域、额度和模型开通状态。当前 LiteLLM 版本约束为 `litellm>=1.80.10,!=1.82.7,!=1.82.8,<1.99.0`（见 `requirements.txt`），保留历史最低版本、显式排除 PyPI 事故版本，并将上界收敛到已验证的 `<1.99.0`，避免未来大版本自动进入。
@@ -172,7 +174,7 @@ LITELLM_FALLBACK_MODELS=openai/gpt-5.6-terra,openai/gpt-5.6-luna
 | `LLM_USAGE_HMAC_SECRET` | Secrets | 可选；只有需要跨部署比较 usage message HMAC 时才配置同一个高熵随机密钥，例如 `openssl rand -hex 32`；不要放 Variables 或提交到版本控制。 |
 | `LLM_USAGE_HMAC_KEY_VERSION` | Variables 或 Secrets | 可选；轮换 `LLM_USAGE_HMAC_SECRET` 时同步更新版本标签，避免误比较不同密钥生成的 HMAC。 |
 
-默认 workflow 已显式映射 `primary`、`secondary`、`aihubmix`、`anspire`、`deepseek`、`dashscope`、`zhipu`、`moonshot`、`minimax`、`volcengine`、`siliconflow`、`openrouter`、`gemini`、`anthropic`、`openai`、`ollama`、`hermes`；`mimo` 未在默认 workflow 中映射。若使用 `mimo`（或任何未列渠道名），除了在 Variables/Secrets 配置同名 `LLM_<CHANNEL>_*` 外，还需在 workflow 中同步补齐对应 env 映射；本地 `.env`、Docker 和自托管脚本不受这个限制。
+默认 workflow 已显式映射 `primary`、`secondary`、`aihubmix`、`aimlapi`、`anspire`、`deepseek`、`dashscope`、`zhipu`、`moonshot`、`minimax`、`volcengine`、`siliconflow`、`openrouter`、`gemini`、`anthropic`、`openai`、`ollama`、`hermes`；`mimo` 未在默认 workflow 中映射。若使用 `mimo`（或任何未列渠道名），除了在 Variables/Secrets 配置同名 `LLM_<CHANNEL>_*` 外，还需在 workflow 中同步补齐对应 env 映射；本地 `.env`、Docker 和自托管脚本不受这个限制。
 
 回滚 HMAC 遥测显式配置时，可移除 `LLM_USAGE_HMAC_SECRET` 并恢复或删除 `LLM_USAGE_HMAC_KEY_VERSION`；留空后系统会回到本地生成 `.llm_usage_hmac_secret` 的默认行为。
 
